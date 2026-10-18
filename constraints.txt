@@ -1,0 +1,17 @@
+# Keep the scientific libraries shipped in the pinned Firedrake image.
+# Upgrading these independently can break Firedrake's compiled dependencies.
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+pillow==12.3.0
+vtk==9.7.1
+
+# Additional transitive dependencies resolved and tested with this release.
+cyclopts==5.2.0
+docstring-parser==0.18.0
+narwhals==2.27.1
+pooch==1.9.0
+pyvista-validation==0.2.2
+rich==15.0.0
+rich-rst==2.2.0
+scooby==0.12.0

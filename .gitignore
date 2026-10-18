@@ -1,0 +1,8 @@
+# Results and regenerated meshes stay on the host but do not belong in Git.
+output/
+*.msh
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.pytest_cache/

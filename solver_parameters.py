@@ -1,33 +1,22 @@
-gamg_parameters = {
-    "ksp_type": "cg",
-    "ksp_max_it": 200,
-    "pc_type": "gamg",
-    "mat_type": "aij",
-    "ksp_converged_reason": None,
-    "mg_levels_esteig_ksp_type": "cg",
-    "mg_levels_ksp_chebyshev_esteig_steps": 50,
-    "mg_levels_ksp_type": "chebyshev",
-    "mg_levels_pc_type": "sor",
-    "pc_gamg_type": "agg",
-    "pc_gamg_agg_nsmooths": 1,
-    "pc_gamg_threshold": 0.01,
+"""Solver settings for the current Firedrake bridge example."""
+filter_parameters = {
+    'mat_type': 'aij', 'ksp_type': 'cg', 'ksp_rtol': 1e-12,
+    'ksp_atol': 1e-14, 'ksp_max_it': 1000,
+    'ksp_error_if_not_converged': True, 'pc_type': 'hypre',
+    'pc_hypre_type': 'boomeramg',
 }
 
-hypre_params = {
-    "ksp_type": "cg",
-    "ksp_rtol": 1e-6,
-    "pc_type": "hypre",
-    "pc_hypre_type": "boomeramg",
-    "pc_hypre_boomeramg_max_iter": 5,
-    "pc_hypre_boomeramg_coarsen_type": "PMIS",
-    "pc_hypre_boomeramg_agg_nl": 2,
-    "pc_hypre_boomeramg_strong_threshold": 0.95,
-    "pc_hypre_boomeramg_interp_type": "ext+i",
-    "pc_hypre_boomeramg_P_max": 2,
-    "pc_hypre_boomeramg_relax_type_all": "sequential-Gauss-Seidel",
-    "pc_hypre_boomeramg_grid_sweeps_all": 1,
-    "pc_hypre_boomeramg_truncfactor": 0.3,
-    "pc_hypre_boomeramg_max_levels": 6,
-    "ksp_max_it": 200,
-    "ksp_converged_maxits": None,
-}
+
+def elasticity_parameters(solver):
+    if solver == 'direct':
+        return {'mat_type': 'aij', 'ksp_type': 'preonly', 'pc_type': 'lu',
+                'pc_factor_mat_solver_type': 'mumps', 'ksp_error_if_not_converged': True}
+    # With very soft void cells GAMG can become indefinite. FGMRES remains
+    # valid for this preconditioner, whereas CG rejects such intermediate PCs.
+    return {'mat_type': 'aij', 'ksp_type': 'fgmres', 'ksp_gmres_restart': 100,
+            'ksp_rtol': 1e-10,
+            'ksp_atol': 1e-13, 'ksp_max_it': 1000,
+            'ksp_error_if_not_converged': True, 'pc_type': 'gamg',
+            'pc_gamg_type': 'agg', 'pc_gamg_agg_nsmooths': 1,
+            'pc_gamg_threshold': .01, 'mg_levels_ksp_type': 'chebyshev',
+            'mg_levels_pc_type': 'jacobi', 'mg_levels_ksp_max_it': 3}
