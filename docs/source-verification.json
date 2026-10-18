@@ -1,0 +1,75 @@
+{
+  "passed": true,
+  "reference": "91be63a",
+  "checks": {
+    "scientific_source": {
+      "passed": true,
+      "reference": "91be63a",
+      "original_ast_sha256": "f84910b1eb4c382f04ef9d8e4c2b4f6052fbf00c1a13241a965c247ff13d3cd7",
+      "normalized_current_ast_sha256": "f84910b1eb4c382f04ef9d8e4c2b4f6052fbf00c1a13241a965c247ff13d3cd7",
+      "allowed_changes": [
+        "firedrake.adjoint import and explicit annotation enable",
+        "concrete coordinate interpolation Functions",
+        "VTKFile replaces File with original H1 export",
+        "derivative callback returns controls",
+        "vendor import path and exact read-only diagnostic exports"
+      ],
+      "optimizer_parameters": {
+        "move": 0.2,
+        "maximum_iterations": 200,
+        "m": 1,
+        "IP": 0,
+        "tol": 1e-06,
+        "accepted_tol": 0.0001,
+        "norm": "L2",
+        "gcmma": false
+      }
+    },
+    "original_files": {
+      "solver_parameters.py": {
+        "passed": true,
+        "sha256": "7f4b4c37367e7d1f077df588b09641900ba140e73a54fdfce54c9df32b921b6a"
+      },
+      "penalization.py": {
+        "passed": true,
+        "sha256": "1d8c379db3f2112b7633355bd431bbeddd277439225065010933418fba4bbcbf"
+      },
+      "bridge.geo": {
+        "passed": true,
+        "mesh_size": 0.015,
+        "allowed_change": "Remove unused zero-length Line(24); comments ignored."
+      },
+      "pyMMAopt": {
+        "passed": true,
+        "commit": "934c0f304354fcb9430e2c326dedf557e3705eab",
+        "sha256": {
+          "__about__.py": "0b79542cc687ef4c7ac76a322fae83db8348faad3ed1c3d52b26785ccf74c879",
+          "__init__.py": "0de12ad32a74f75a6f833b48529d2960449513d3331469f9552e88404c2a5a6c",
+          "constraints.py": "cc273f2937bd4674e2d68282729a432756a810c446cf0c17a3c157ba76165380",
+          "mma.py": "42858b2eddbfde15d35326742cbf3cd5cf753d7611569a0fe77cff44b5c6ebc0",
+          "mma_solver.py": "aa76334eaee8ef7abdf811c1d8086b2f365091f2c87b8a213f4f3db4d2512381",
+          "LICENSE": "8c5e1117a0973d5a3e6b3c7a43f7a8a0e0f2f5c7f472e02f8085acf68cdcea1a",
+          "NOTICE": "1c03a03406e4fc284f812456ef8a4866b8d5a94f57a85a8be7295a91b75c1918"
+        }
+      }
+    },
+    "dependencies": {
+      "passed": true,
+      "firedrake": "2026.10.0",
+      "numexpr": "2.14.2",
+      "pyMMAopt": "0.0.1",
+      "gmsh": "4.12.1",
+      "imports": [
+        "firedrake",
+        "firedrake.adjoint",
+        "pyMMAopt",
+        "numexpr",
+        "numpy",
+        "matplotlib",
+        "pyvista",
+        "plotly"
+      ]
+    }
+  },
+  "elapsed_seconds": 1.3578416679999918
+}

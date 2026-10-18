@@ -3,8 +3,8 @@
 
 The geometry comes from Firedrake's VTK output.  The displayed full bridge is
 the computed quarter reflected across its two displacement-symmetry planes,
-x=0 and y=1.  The thresholded cells visualize the optimized density field,
-not a second optimization or a reconstructed CAD/finite-element model.
+x=0 and y=1. Cell thresholding and a continuous-density isosurface are
+available. These are display geometries, not separate mechanical solutions.
 """
 
 from __future__ import annotations
@@ -56,7 +56,9 @@ def read_grid(path: Path, first: bool = False) -> pv.UnstructuredGrid:
         if len(blocks) == 1:
             mesh = blocks[0]
         else:
-            mesh = mesh.combine(merge_points=True)
+            # Preserve piece-interface values until continuity is checked.
+            # Merging here could silently discard a jump in DG density data.
+            mesh = mesh.combine(merge_points=False)
     if not isinstance(mesh, pv.UnstructuredGrid):
         mesh = mesh.cast_to_unstructured_grid()
     if not mesh.n_cells:
@@ -124,6 +126,76 @@ def topology_surface(mesh: pv.UnstructuredGrid, name: str, level: float) -> pv.P
     )
 
 
+def continuous_grid(mesh: pv.UnstructuredGrid, name: str) -> pv.UnstructuredGrid:
+    """Merge MPI interface vertices only when their density values agree.
+
+    Parallel H1 VTK exports repeat partition-interface points. Exact-coordinate
+    duplicates are valid when their scalar values agree to atol=1e-12,
+    rtol=1e-10; discontinuous element data must not be merged into an invented
+    continuous density field.
+    """
+    if name not in mesh.point_data:
+        raise ValueError("Isosurface display needs continuous H1 point data, such as final.pvd.")
+    values = np.asarray(mesh.point_data[name])
+    if values.size != mesh.n_points or not np.all(np.isfinite(values)):
+        raise ValueError("Isosurface density must be a finite scalar value at every point.")
+    values = values.reshape(-1)
+    coordinates, inverse = np.unique(mesh.points, axis=0, return_inverse=True)
+    if len(coordinates) == mesh.n_points:
+        return mesh
+    minimum = np.full(len(coordinates), np.inf)
+    maximum = np.full(len(coordinates), -np.inf)
+    np.minimum.at(minimum, inverse, values)
+    np.maximum.at(maximum, inverse, values)
+    allowed = 1e-12 + 1e-10 * np.maximum(np.abs(minimum), np.abs(maximum))
+    if np.any(maximum - minimum > allowed):
+        worst = float(np.max(maximum - minimum))
+        raise ValueError("Isosurface display needs continuous H1 density. Coincident vertices "
+                         f"have incompatible values (largest jump {worst:.6g}); "
+                         "use the H1 final.pvd export or --surface-style cells for DG data.")
+    merged = mesh.clean(tolerance=0.0, remove_unused_points=True,
+                        produce_merge_map=False, average_point_data=False)
+    print(f"Merged {mesh.n_points - merged.n_points:,} consistent MPI interface vertices "
+          "for continuous-density display.", flush=True)
+    return merged
+
+
+def isosurface(mesh: pv.UnstructuredGrid, name: str, level: float,
+               smooth_iterations: int = 0) -> pv.PolyData:
+    """Boundary of a retained continuous-density volume, including domain caps.
+
+    Firedrake's H1 visualization export reconstructs the DG0 density at shared
+    vertices. Clipping that piecewise-linear field places faces at the requested
+    density, unlike retaining or discarding entire tetrahedra. Reflect before
+    optional surface smoothing so the symmetry planes do not leave seams.
+    """
+    mesh = continuous_grid(mesh, name)
+    design = mesh.extract_cells(mesh.cell_centers().points[:, 2] < 0.98 - 1e-8)
+    retained = design.clip_scalar(scalars=name, value=level, invert=False)
+    if not retained.n_cells:
+        print(f"No reconstructed design density exceeds {level}; displaying the deck only.", flush=True)
+        return pv.PolyData()
+    surface = retained.extract_surface(algorithm="dataset_surface").triangulate().clean()
+    surface = full_bridge(surface)
+    if smooth_iterations:
+        surface = surface.smooth(n_iter=smooth_iterations, relaxation_factor=0.1,
+                                 boundary_smoothing=False, feature_smoothing=False)
+    return surface.compute_normals(consistent_normals=True, auto_orient_normals=True,
+                                   split_vertices=False)
+
+
+def display_description(level: float, style: str, smooth_iterations: int) -> tuple[str, str]:
+    if style == "cells":
+        return (f"Cells with material density ≥ {level:g}",
+                f"Whole cells with material density ≥ {level:g} are retained.")
+    description = (f"A density {level:g} isosurface is extracted from the continuous H1 "
+                   "visualization field, with domain boundaries closed.")
+    if smooth_iterations:
+        description += (f" The displayed surface then receives {smooth_iterations} Laplacian "
+                        "smoothing steps (relaxation 0.1). Smoothing changes display geometry.")
+    return (f"Continuous density {level:g} surface", description)
+
+
 def read_history(path: Path | None) -> dict[str, np.ndarray]:
     if path is None or not path.exists():
         return {}
@@ -176,7 +248,8 @@ def setup_surface() -> pv.PolyData:
     return pv.Box(bounds=(-0.5, 0.5, 0, 2, 0, 0.98)).triangulate()
 
 
-def add_scene(plotter: pv.Plotter, surface: pv.PolyData | None, setup: bool = False):
+def add_scene(plotter: pv.Plotter, surface: pv.PolyData | None, setup: bool = False,
+              camera: str = "standard"):
     plotter.set_background(BG)
     if setup:
         plotter.add_mesh(setup_surface(), color="#b9cbd4", opacity=0.15,
@@ -197,7 +270,9 @@ def add_scene(plotter: pv.Plotter, surface: pv.PolyData | None, setup: bool = Fa
         plotter.add_mesh(support, color=BLUE, ambient=0.35)
     for arrow in load_arrows():
         plotter.add_mesh(arrow, color=RED, smooth_shading=True, ambient=0.35)
-    plotter.camera_position = [(3.0, -3.9, 2.7), (0, 1, 0.58), (0, 0, 1)]
+    plotter.camera_position = ([(3.0, -4.0, 1.4), (0, 1, 0.52), (0, 0, 1)]
+                               if camera == "low" else
+                               [(3.0, -3.9, 2.7), (0, 1, 0.58), (0, 0, 1)])
     plotter.camera.parallel_projection = True
     plotter.camera.parallel_scale = 1.08
     plotter.enable_anti_aliasing("ssaa")
@@ -215,12 +290,14 @@ def font(size: int, bold: bool = False):
     return ImageFont.load_default()
 
 
-def static_illustration(surface: pv.PolyData, output: Path, summary: dict, level: float):
+def static_illustration(surface: pv.PolyData, output: Path, summary: dict, level: float,
+                        style: str = "cells", smooth_iterations: int = 0,
+                        camera: str = "standard"):
     scenes = []
     for is_setup in (True, False):
         plotter = pv.Plotter(off_screen=True, window_size=(1200, 900), lighting="three lights")
         try:
-            add_scene(plotter, surface, setup=is_setup)
+            add_scene(plotter, surface, setup=is_setup, camera=camera)
             scenes.append(Image.fromarray(plotter.screenshot(return_img=True)))
         finally:
             plotter.close()
@@ -240,15 +317,19 @@ def static_illustration(surface: pv.PolyData, output: Path, summary: dict, level
     # empty lower margin so the poster remains useful at ordinary screen sizes.
     draw.text((90, 1277), "Shaded quarter: finite-element model", font=font(25, True), fill=NAVY)
     draw.text((90, 1320), "The full bridge follows by two symmetry reflections.", font=font(23), fill="#59707f")
-    draw.text((1290, 1277), f"Solid display: material density ≥ {level:g}", font=font(25, True), fill=NAVY)
-    draw.text((1290, 1320), "Actual simulation output; the deck is kept solid.", font=font(23), fill="#59707f")
+    display_title, _ = display_description(level, style, smooth_iterations)
+    draw.text((1290, 1277), display_title, font=font(25, True), fill=NAVY)
+    detail = (f"H1 reconstruction / {smooth_iterations} smoothing steps / solid deck"
+              if style == "isosurface" else "Actual simulation output; the deck is kept solid.")
+    draw.text((1290, 1320), detail, font=font(23), fill="#59707f")
     draw.line((90, 1385, 2310, 1385), fill="#dce3e7", width=2)
     draw.ellipse((94, 1422, 112, 1440), fill=RED)
     draw.text((128, 1411), "Distributed vertical load", font=font(23), fill="#59707f")
     draw.rectangle((647, 1422, 665, 1440), fill=BLUE)
     draw.text((683, 1411), "Fixed support patches", font=font(23), fill="#59707f")
     draw.rectangle((1197, 1422, 1215, 1440), fill=GOLD)
-    draw.text((1233, 1411), "Density-threshold visualization", font=font(23), fill="#59707f")
+    legend_label = "Density-isosurface visualization" if style == "isosurface" else "Density-threshold visualization"
+    draw.text((1233, 1411), legend_label, font=font(23), fill="#59707f")
     draw.text((2040, 1411), "FIREDRAKE", font=font(23, True), fill=NAVY)
     page.save(output / "bridge.png", optimize=True)
 
@@ -301,9 +382,11 @@ def mesh_trace(surface: pv.PolyData, *, name: str, color: str, opacity: float = 
                      lightposition=dict(x=3, y=-4, z=5))
 
 
-def interactive_figure(surface: pv.PolyData, level: float):
+def interactive_figure(surface: pv.PolyData, level: float, style: str = "cells",
+                        smooth_iterations: int = 0, camera: str = "standard"):
     fig = go.Figure()
-    fig.add_trace(mesh_trace(surface, name=f"Optimized material (ρ ≥ {level:g})", color=GOLD))
+    display_title, _ = display_description(level, style, smooth_iterations)
+    fig.add_trace(mesh_trace(surface, name=display_title, color=GOLD))
     fig.add_trace(mesh_trace(pv.Box(bounds=(-0.5, 0.5, 0, 2, 0.98, 1)).triangulate(),
                              name="Solid deck", color="#516a7b"))
     support = support_boxes()
@@ -323,7 +406,7 @@ def interactive_figure(surface: pv.PolyData, level: float):
             zaxis=dict(title="Height, z", showbackground=False, showgrid=False, zeroline=False,
                        range=[-0.08, 1.36]),
             aspectmode="data", bgcolor=BG,
-            camera=dict(eye=dict(x=1.55, y=-2.25, z=1.5),
+            camera=dict(eye=dict(x=1.55, y=-2.25, z=0.48 if camera == "low" else 1.5),
                         center=dict(x=0, y=0, z=0), projection=dict(type="orthographic")),
         ),
         updatemenus=[dict(type="buttons", direction="left", x=0.02, y=0.06,
@@ -341,8 +424,10 @@ def image_uri(path: Path) -> str:
 
 
 def write_report(surface: pv.PolyData, output: Path, summary: dict, history: dict,
-                 level: float, source: Path, has_history: bool):
-    figure = interactive_figure(surface, level)
+                 level: float, source: Path, has_history: bool,
+                 style: str = "cells", smooth_iterations: int = 0,
+                 camera: str = "standard"):
+    figure = interactive_figure(surface, level, style, smooth_iterations, camera)
     chart = figure.to_html(full_html=False, include_plotlyjs=False,
                            config={"displaylogo": False, "responsive": True,
                                    "toImageButtonOptions": {"filename": "bridge-3d", "scale": 2}})
@@ -358,7 +443,8 @@ def write_report(surface: pv.PolyData, output: Path, summary: dict, history: dic
         ("Optimization iterations", str(iteration)),
         ("Design-region volume", f"{100 * float(vf):.2f}%" if vf is not None else "See summary.json"),
         ("Final compliance", f"{float(comp):.5g}" if comp is not None else "See summary.json"),
-        ("Display threshold", f"ρ ≥ {level:g}"),
+        ("Display isovalue" if style == "isosurface" else "Display threshold",
+         f"ρ = {level:g}" if style == "isosurface" else f"ρ ≥ {level:g}"),
     ]
     metrics_html = "".join(f'<div class="metric"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
                            for label, value in cards)
@@ -370,6 +456,7 @@ def write_report(surface: pv.PolyData, output: Path, summary: dict, history: dic
     convergence_html = (f'<section class="card"><h2>Optimization history</h2><img alt="Compliance and volume histories" '
                         f'src="{image_uri(output / "convergence.png")}"></section>') if has_history else ""
     summary_html = html.escape(json.dumps(summary, indent=2))
+    _, display_detail = display_description(level, style, smooth_iterations)
     report = f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Firedrake bridge · computed topology</title>
@@ -389,12 +476,12 @@ footer{{font-size:12px;color:var(--muted);border-top:1px solid var(--line);paddi
 <div class="eyebrow">FIREDRAKE / COMPUTATIONAL STRUCTURAL DESIGN</div>
 <h1>A bridge shaped by forces.</h1>
 <p class="intro">An elastic bridge carries a downward deck load using a limited material budget.
-A Helmholtz filter regularizes the density field. The surface below comes directly from the computed finite-element solution.</p>
+A Helmholtz filter regularizes the density field. The surface below visualizes the computed finite-element density.</p>
 <div class="metrics">{metrics_html}</div>
 {run_status}
 <section class="card"><h2>Explore the computed structure</h2><p class="hint">Drag to rotate · scroll to zoom · click a legend item to hide it · use the camera button to save a view. Works offline.</p>
 {chart}<p class="hint">The full bridge is the computed quarter reflected across x = 0 and y = 1.
-The material display uses cell density ≥ {level:g}; it is a visualization, not a separate mechanical validation of a thresholded structure.</p></section>
+{html.escape(display_detail)} The displayed geometry has not undergone a separate mechanical validation.</p></section>
 <section class="card"><img alt="Bridge design domain, loading, supports, and optimized topology" src="{image_uri(output / 'bridge.png')}"></section>
 {convergence_html}
 <div class="two"><div><h3>What is being optimized?</h3><p>Material density in the region below the deck. Compliance measures load-weighted displacement;
@@ -416,20 +503,40 @@ def main():
     parser.add_argument("--output-dir", "--output_dir", type=Path, default=Path("results"))
     parser.add_argument("--density-field", help="Override automatic density-field selection")
     parser.add_argument("--threshold", type=float, default=0.45, help="Density threshold used only for visual display")
+    parser.add_argument("--surface-style", choices=("cells", "isosurface"), default="cells",
+                        help="Whole-cell threshold or continuous H1 isosurface (use the H1 final.pvd export)")
+    parser.add_argument("--smooth-iterations", type=int, default=0,
+                        help="Display-only Laplacian smoothing steps for the isosurface")
+    parser.add_argument("--camera", choices=("standard", "low"), default="standard",
+                        help="Low camera exposes the branching supports below the deck")
     args = parser.parse_args()
     if not 0 < args.threshold < 1:
         parser.error("--threshold must be between 0 and 1")
+    if args.smooth_iterations < 0:
+        parser.error("--smooth-iterations must be nonnegative")
+    if args.surface_style == "cells" and args.smooth_iterations:
+        parser.error("--smooth-iterations requires --surface-style isosurface")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     mesh = read_grid(args.input)
     field = density_name(mesh, args.density_field)
     print(f"Rendering {mesh.n_cells:,} quarter-domain cells; field={field}; threshold={args.threshold}", flush=True)
-    surface = topology_surface(mesh, field, args.threshold)
+    surface = (isosurface(mesh, field, args.threshold, args.smooth_iterations)
+               if args.surface_style == "isosurface" else
+               topology_surface(mesh, field, args.threshold))
     print(f"Full-bridge display surface: {surface.n_cells:,} triangles", flush=True)
     history = read_history(args.history)
     summary = read_summary(args.summary)
-    static_illustration(surface, args.output_dir, summary, args.threshold)
+    static_illustration(surface, args.output_dir, summary, args.threshold,
+                        args.surface_style, args.smooth_iterations, args.camera)
     has_history = convergence_figure(history, summary, args.output_dir)
-    write_report(surface, args.output_dir, summary, history, args.threshold, args.input, has_history)
+    write_report(surface, args.output_dir, summary, history, args.threshold, args.input, has_history,
+                 args.surface_style, args.smooth_iterations, args.camera)
+    (args.output_dir / "visualization.json").write_text(json.dumps(dict(
+        source=str(args.input), density_field=field, surface_style=args.surface_style,
+        threshold=args.threshold, smooth_iterations=args.smooth_iterations, camera=args.camera,
+        description=display_description(args.threshold, args.surface_style, args.smooth_iterations)[1],
+        modifies_computed_fields=False,
+    ), indent=2) + "\n")
     print(f"Figures: {args.output_dir / 'bridge.png'}", flush=True)
     if has_history:
         print(f"History: {args.output_dir / 'convergence.png'}", flush=True)

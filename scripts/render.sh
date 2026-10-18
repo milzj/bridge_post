@@ -10,5 +10,6 @@ exec "$script_dir/container.sh" python3 render_results.py \
     --input "$output_dir/final.pvd" \
     --history "$output_dir/history.csv" \
     --summary "$output_dir/summary.json" \
+    --surface-style isosurface --threshold 0.8 --smooth-iterations 30 --camera low \
     --output-dir "$output_dir" \
     "$@"

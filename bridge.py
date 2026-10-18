@@ -1,251 +1,197 @@
-"""Density-filtered bridge optimization for Firedrake 2026.10 and mmapy.
-
-Retains the original linear elasticity, RAMP, and DG0 Helmholtz filter.
-Uses exact discrete self-adjoint derivatives in place of obsolete adapters.
-"""
-import argparse
-import csv
-import json
-from importlib.metadata import version
-from pathlib import Path
-import subprocess
+import firedrake as fd
+import firedrake.adjoint as fda
+fda.continue_annotation()
+from firedrake import (
+    inner,
+    sqrt,
+    jump,
+    dx,
+    ds,
+    dS,
+    sym,
+    nabla_grad,
+    tr,
+    Identity,
+)
 import sys
-import time
-
-# Firedrake initializes PETSc at import time. Keep this application's argparse
-# options out of PETSc's option database (otherwise it reports them as unused).
-_application_argv = sys.argv
-try:
-    sys.argv = sys.argv[:1]
-    import firedrake as fd
-finally:
-    sys.argv = _application_argv
-import numpy as np
-from mmapy import mmasub
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).with_name("vendor")))
+from pyMMAopt import MMASolver, ReducedInequality
+import itertools
+import argparse
 from penalization import ramp
-from solver_parameters import elasticity_parameters, filter_parameters
-
-FIREDRAKE_VERSION = version('firedrake')
-
-
-def make_mesh(path, size):
-    subprocess.run([
-        "gmsh", "-3", str(Path(__file__).with_name("bridge.geo")),
-        "-clmin", str(size), "-clmax", str(size), "-format", "msh2",
-        "-o", str(path), "-nt", "1", "-v", "2",
-    ], check=True)
+from run_results import RunResults
+from solver_parameters import gamg_parameters, hypre_params
 
 
-class Bridge:
-    def __init__(self, path, fraction, radius, solver):
-        self.mesh = fd.Mesh(str(path))
-        if self.mesh.comm.size != 1:
-            raise RuntimeError("Use one MPI rank: the MMA driver is serial.")
-        self.Q = fd.FunctionSpace(self.mesh, "DG", 0)
-        self.W = fd.VectorFunctionSpace(self.mesh, "CG", 1)
-        self.rho = fd.Function(self.Q, name="density").assign(fraction)
-        self.filtered = fd.Function(self.Q, name="density_filtered")
-        self.material = fd.Function(self.Q, name="material_density")
-        self.u = fd.Function(self.W, name="displacement")
-        self.dx, self.ds = fd.dx(domain=self.mesh), fd.ds(domain=self.mesh)
-        self.volume = float(fd.assemble(fd.Constant(1.)*self.dx(1)))
-        self.deck_volume = float(fd.assemble(fd.Constant(1.)*self.dx(0)))
-        self.load_area = float(fd.assemble(fd.Constant(1.)*self.ds(3)))
-        if min(self.volume, self.deck_volume, self.load_area) <= 0:
-            raise RuntimeError("Missing design/deck/load mesh markers.")
-        self.volume_limit = fraction*self.volume
-        a, b = fd.TrialFunction(self.Q), fd.TestFunction(self.Q)
-        coordinates = [fd.Function(self.Q).interpolate(x)
-                       for x in fd.SpatialCoordinate(self.mesh)]
-        distance = fd.sqrt(sum(fd.jump(x)**2 for x in coordinates))
-        self.filter_a = (radius**2*fd.jump(a)*fd.jump(b)/distance*fd.dS
-                         + a*b*self.dx)
-        self.forward_filter = fd.LinearVariationalSolver(
-            fd.LinearVariationalProblem(self.filter_a, self.rho*b*self.dx,
-                                        self.filtered, constant_jacobian=True),
-            solver_parameters=filter_parameters)
-        E, nu = 1., .3
-        mu, lam = fd.Constant(E/(2*(1+nu))), fd.Constant(E*nu/((1+nu)*(1-2*nu)))
-        def sigma(v):
-            return 2*mu*fd.sym(fd.grad(v)) + lam*fd.div(v)*fd.Identity(3)
-        trial, test = fd.TrialFunction(self.W), fd.TestFunction(self.W)
-        stiffness = ramp(self.filtered, ramp_p=10., val_0=1e-5)
-        self.traction = fd.Constant((0., 0., -1.))
-        state_a = (fd.inner(stiffness*sigma(trial), fd.grad(test))*self.dx(1)
-                   + fd.inner(sigma(trial), fd.grad(test))*self.dx(0))
-        state_L = fd.inner(self.traction, test)*self.ds(3)
-        bcs = [fd.DirichletBC(self.W, (0., 0., 0.), 2),
-               fd.DirichletBC(self.W.sub(0), 0., 4),
-               fd.DirichletBC(self.W.sub(1), 0., 5)]
-        x, y, z = fd.SpatialCoordinate(self.mesh)
-        modes = [fd.Function(self.W).interpolate(v) for v in (
-            fd.as_vector((1, 0, 0)), fd.as_vector((0, 1, 0)),
-            fd.as_vector((0, 0, 1)), fd.as_vector((0, z, -y)),
-            fd.as_vector((-z, 0, x)), fd.as_vector((y, -x, 0)))]
-        nullspace = fd.VectorSpaceBasis(modes)
-        nullspace.orthonormalize()
-        self.state_solver = fd.LinearVariationalSolver(
-            fd.LinearVariationalProblem(state_a, state_L, self.u, bcs=bcs),
-            solver_parameters=elasticity_parameters(solver), near_nullspace=nullspace)
-        # For A u=f, d(f^T u)/d(r_f)=-u^T A' u. The filter is symmetric.
-        energy = fd.inner(stiffness*sigma(self.u), fd.grad(self.u))*self.dx(1)
-        self.adjoint = fd.Function(self.Q)
-        self.adjoint_filter = fd.LinearVariationalSolver(
-            fd.LinearVariationalProblem(self.filter_a,
-                -fd.derivative(energy, self.filtered, b), self.adjoint,
-                constant_jacobian=True), solver_parameters=filter_parameters)
-        vadj = fd.Function(self.Q)
-        fd.solve(self.filter_a == b*self.dx(1), vadj, solver_parameters=filter_parameters)
-        self.volume_gradient = fd.assemble(vadj*b*self.dx).dat.data_ro.copy()
-        self.gradient_form = self.adjoint*b*self.dx
-        self.compliance_form = fd.inner(self.traction, self.u)*self.ds(3)
-        self.design_mask = fd.assemble(b*self.dx(1)).dat.data_ro > 0
-        self.cells = self.Q.dim()
+def compliance_bridge():
+    DECK = 0
+    DOMAIN = 1
+    SUPPORT = 2
+    LOAD = 3
+    SYMMETRY_X = 4
+    SYMMETRY_Y = 5
 
-    def evaluate(self, x, gradient=True):
-        self.rho.dat.data[:] = np.asarray(x).ravel()
-        self.forward_filter.solve()
-        self.state_solver.solve()
-        J = float(fd.assemble(self.compliance_form))
-        V = float(fd.assemble(self.filtered*self.dx(1)))
-        if not np.isfinite(J) or J <= 0:
-            raise RuntimeError(f"Invalid compliance: {J}")
-        if not gradient:
-            return J, V
-        self.adjoint_filter.solve()
-        g = fd.assemble(self.gradient_form).dat.data_ro.copy()
-        if not np.all(np.isfinite(g)):
-            raise RuntimeError("Nonfinite reduced gradient.")
-        return J, V, g
+    parser = argparse.ArgumentParser(description="Bridge design")
+    parser.add_argument(
+        "--output_dir",
+        dest="output_dir",
+        type=str,
+        action="store",
+        default="./",
+        help="Output directory",
+    )
+    opts = parser.parse_args()
+    output_dir = opts.output_dir
+    # Elasticity parameters
+    E, nu = 1.0, 0.3
+    mu, lmbda = (
+        fd.Constant(E / (2 * (1 + nu))),
+        fd.Constant(E * nu / ((1 + nu) * (1 - 2 * nu))),
+    )
 
-    def write(self, writer, step):
-        self.material.dat.data[:] = np.where(self.design_mask, self.filtered.dat.data_ro, 1.)
-        writer.write(self.rho, self.filtered, self.material, self.u, time=float(step))
+    mesh = fd.Mesh("./bridge.msh")
 
-    def verify_gradient(self, x):
-        direction = np.random.default_rng(17).uniform(-1., 1., x.size)
-        J, V, g = self.evaluate(x)
-        slope, vslope = float(g@direction), float(self.volume_gradient@direction)
-        rows = []
-        for h in [.04, .02, .01, .005]:
-            jp, vp = self.evaluate(x+h*direction, False)
-            jm, vm = self.evaluate(x-h*direction, False)
-            rows.append(dict(step=h, remainder=abs(jp-J-h*slope),
-                relative_error=abs((jp-jm)/(2*h)-slope)/max(abs(slope), 1e-12),
-                volume_relative_error=abs((vp-vm)/(2*h)-vslope)/max(abs(vslope), 1e-12)))
-        rates = [float(np.log2(a['remainder']/b['remainder']))
-                 for a, b in zip(rows[:-1], rows[1:])]
-        passed = (min(rates[-2:]) > 1.8 and rows[-1]['relative_error'] < .01
-                  and rows[-1]['volume_relative_error'] < 1e-5)
-        self.evaluate(x)
-        result = dict(passed=bool(passed), convergence_rates=rates, samples=rows)
-        print('Gradient verification:', json.dumps(result), flush=True)
-        if not passed:
-            raise RuntimeError('Discrete adjoint failed its directional Taylor test.')
-        return result
+    RHO = fd.FunctionSpace(mesh, "DG", 0)
+    rho = fd.Function(RHO).assign(fd.Constant(0.5))
 
+    af, b = fd.TrialFunction(RHO), fd.TestFunction(RHO)
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mesh-size', type=float, default=.04)
-    parser.add_argument('--mesh', type=Path)
-    parser.add_argument('--max-iterations', type=int, default=200)
-    parser.add_argument('--output-dir', '--output_dir', type=Path, default=Path('output/demo'))
-    parser.add_argument('--volume-fraction', type=float, default=.15)
-    parser.add_argument('--filter-radius', type=float, default=float(np.sqrt(2e-4)))
-    parser.add_argument('--solver', choices=['amg', 'direct'], default='amg')
-    parser.add_argument('--verify-gradient', action='store_true')
-    parser.add_argument('--check-only', action='store_true')
-    parser.add_argument('--no-render', action='store_true')
-    parser.add_argument('--save-every', type=int, default=10)
-    parser.add_argument('--move-limit', type=float, default=.1)
-    parser.add_argument('--tolerance', type=float, default=1e-3)
-    args = parser.parse_args()
-    if args.mesh_size <= 0 or args.filter_radius <= 0:
-        parser.error('Mesh size and filter radius must be positive.')
-    if not .05 <= args.volume_fraction < 1:
-        parser.error('Volume fraction must be in [0.05, 1).')
-    if args.max_iterations < 0 or args.save_every < 1 or not 0 < args.move_limit <= 1:
-        parser.error('Invalid iteration, save-every, or move-limit argument.')
-    out = args.output_dir.resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    start = time.monotonic()
-    mesh_path = args.mesh or out/'bridge.msh'
-    if args.mesh is None:
-        make_mesh(mesh_path, args.mesh_size)
-    model = Bridge(mesh_path, args.volume_fraction, args.filter_radius, args.solver)
-    x = model.rho.dat.data_ro.copy()
-    gradient_check = model.verify_gradient(x) if args.verify_gradient else None
-    writer = fd.VTKFile(str(out/'bridge_evolution.pvd'))
-    final_writer = fd.VTKFile(str(out/'final.pvd'))
-    initial_J, _, _ = model.evaluate(x)
-    model.write(writer, 0)
-    print(f'Firedrake {FIREDRAKE_VERSION}: {model.cells} cells, {model.W.dim()} displacement DOFs', flush=True)
-    print('iteration,compliance,volume_fraction,max_density_change,elapsed_seconds', flush=True)
-    xold1, xold2 = x.copy(), x.copy()
-    low, upp = np.zeros((x.size, 1)), np.ones((x.size, 1))
-    history, converged, last_change = [], False, 0.
-    nsteps = 0 if args.check_only else args.max_iterations
-    with (out/'history.csv').open('w', newline='') as f:
-        log = csv.DictWriter(f, fieldnames=['iteration', 'compliance', 'volume_fraction',
-                                          'max_density_change', 'elapsed_seconds'])
-        log.writeheader()
-        for iteration in range(nsteps+1):
-            J, V, g = model.evaluate(x)
-            row = dict(iteration=iteration, compliance=J, volume_fraction=V/model.volume,
-                       max_density_change=last_change, elapsed_seconds=time.monotonic()-start)
-            history.append(row)
-            log.writerow(row)
-            f.flush()
-            print(f'{iteration},{J:.9g},{V/model.volume:.7f},{last_change:.5g},{row["elapsed_seconds"]:.2f}', flush=True)
-            if iteration and (iteration % args.save_every == 0 or iteration == nsteps):
-                model.write(writer, iteration)
-            if iteration >= 20 and last_change < args.tolerance and V <= model.volume_limit*1.001:
-                converged = True
-                if iteration % args.save_every:
-                    model.write(writer, iteration)
-                break
-            if iteration == nsteps:
-                break
-            col = lambda v: np.asarray(v).reshape(-1, 1)
-            result = mmasub(1, x.size, iteration+1, col(x), np.zeros((x.size, 1)),
-                np.ones((x.size, 1)), col(xold1), col(xold2), J/initial_J, col(g)/initial_J,
-                np.array([[V/model.volume_limit-1.]]),
-                (model.volume_gradient/model.volume_limit).reshape(1, -1), low, upp,
-                1., np.zeros((1, 1)), np.full((1, 1), 1000.), np.zeros((1, 1)),
-                move=args.move_limit)
-            newx = result[0].ravel()
-            low, upp = result[-2:]
-            last_change = float(np.max(np.abs(newx-x)))
-            xold2, xold1, x = xold1.copy(), x.copy(), newx.copy()
-    model.write(final_writer, history[-1]['iteration'])
-    np.savez_compressed(out/'design.npz', density=x,
-        density_filtered=model.filtered.dat.data_ro, material_density=model.material.dat.data_ro)
-    final = history[-1]
-    summary = dict(firedrake_version=FIREDRAKE_VERSION, mesh_size=args.mesh_size,
-        cells=model.cells, displacement_dofs=model.W.dim(), iterations=final['iteration'],
-        initial_compliance=initial_J, final_compliance=final['compliance'],
-        compliance_reduction_percent=100*(1-final['compliance']/initial_J),
-        volume_fraction=final['volume_fraction'], volume_limit=args.volume_fraction,
-        design_volume=model.volume, deck_volume=model.deck_volume, load_area=model.load_area,
-        filter_radius=args.filter_radius, filter_coefficient=args.filter_radius**2,
-        min_density=float(np.min(x)), max_density=float(np.max(x)), converged=converged,
-        stopping_reason='density_change' if converged else
-            ('forward_check' if args.check_only else 'iteration_limit'),
-        max_density_change=last_change, elapsed_seconds=time.monotonic()-start,
-        gradient_check=gradient_check, solver=args.solver, symmetry_planes=dict(x=0., y=1.))
-    (out/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
-    if not args.check_only and nsteps >= 20:
-        if final['volume_fraction'] > args.volume_fraction*1.005:
-            raise RuntimeError('Final volume constraint violation exceeds 0.5%.')
-        if final['compliance'] >= initial_J:
-            raise RuntimeError('Optimization did not reduce compliance.')
-    if not args.no_render:
-        subprocess.run([sys.executable, str(Path(__file__).with_name('render_results.py')),
-            '--input', str(out/'final.pvd'), '--history', str(out/'history.csv'),
-            '--summary', str(out/'summary.json'), '--output-dir', str(out)], check=True)
-    print(f'Results saved to {out}', flush=True)
+    filter_radius = fd.Constant(2e-4)
+    x, y, z = fd.SpatialCoordinate(mesh)
+    with fda.stop_annotating():
+        x_ = fd.Function(RHO).interpolate(x)
+        y_ = fd.Function(RHO).interpolate(y)
+        z_ = fd.Function(RHO).interpolate(z)
+    Delta_h = sqrt(jump(x_) ** 2 + jump(y_) ** 2 + jump(z_) ** 2)
+    aH = filter_radius * jump(af) / Delta_h * jump(b) * dS + af * b * dx
+    LH = rho * b * dx
+
+    rhof = fd.Function(RHO)
+    problem_filter = fd.LinearVariationalProblem(aH, LH, rhof)
+    solver_filter = fd.LinearVariationalSolver(
+        problem_filter, solver_parameters=hypre_params
+    )
+    solver_filter.solve()
+    rhofControl = fda.Control(rhof)
+
+    H1 = fd.VectorElement("CG", mesh.ufl_cell(), 1)
+    W = fd.FunctionSpace(mesh, H1)
+
+    x, y, z = fd.SpatialCoordinate(mesh)
+    modes = [fd.Function(W) for _ in range(6)]
+    modes[0].interpolate(fd.Constant([1, 0, 0]))
+    modes[1].interpolate(fd.Constant([0, 1, 0]))
+    modes[2].interpolate(fd.Constant([0, 0, 1]))
+    modes[3].interpolate(fd.as_vector([0, z, -y]))
+    modes[4].interpolate(fd.as_vector([-z, 0, x]))
+    modes[5].interpolate(fd.as_vector([y, -x, 0]))
+    nullmodes = fd.VectorSpaceBasis(modes)
+    # Make sure they're orthonormal.
+    nullmodes.orthonormalize()
+
+    u = fd.TrialFunction(W)
+    v = fd.TestFunction(W)
+
+    def epsilon(u):
+        return sym(nabla_grad(u))
+
+    def sigma(v):
+        return 2.0 * mu * epsilon(v) + lmbda * tr(epsilon(v)) * Identity(3)
+
+    # Variational forms
+    a = inner(ramp(rhof, ramp_p=10.0, val_0=1e-5) * sigma(u), nabla_grad(v)) * dx(
+        DOMAIN
+    ) + inner(sigma(u), nabla_grad(v)) * dx(DECK)
+    t = fd.Constant((0.0, 0.0, -1.0))
+    L = inner(t, v) * ds(LOAD)
+
+    # Dirichlet BCs
+    bc1 = fd.DirichletBC(W, fd.Constant((0.0, 0.0, 0.0)), SUPPORT)
+    bc2 = fd.DirichletBC(W.sub(0), fd.Constant(0.0), SYMMETRY_X)
+    bc3 = fd.DirichletBC(W.sub(1), fd.Constant(0.0), SYMMETRY_Y)
+
+    u_sol = fd.Function(W)
+    problem = fd.LinearVariationalProblem(a, L, u_sol, bcs=[bc1, bc2, bc3])
+    solver = fd.LinearVariationalSolver(
+        problem, near_nullspace=nullmodes, solver_parameters=gamg_parameters
+    )
+    solver.solve()
+
+    # Cost function
+    J = fd.assemble(fd.Constant(1e1) * inner(t, u_sol) * ds(LOAD))
+    # Constraint
+    VolPen = fd.assemble(rhof * dx(DOMAIN))
+    with fda.stop_annotating():
+        total_vol = fd.assemble(fd.Constant(1.0) * dx(DOMAIN, domain=mesh))
+        Vlimit = 0.15 * total_vol
+    VolControl = fda.Control(VolPen)
+
+    # Read-only controls used to save run diagnostics.
+    Jcontrol = fda.Control(J)
+    Ucontrol = fda.Control(u_sol)
+
+    # Plotting
+    global_counter1 = itertools.count()
+    phi_pvd = fd.VTKFile(f"{output_dir}/bridge_evolution.pvd", target_continuity=fd.H1)
+    rho_viz_f = fd.Function(RHO, name="rho")
+
+    def deriv_cb(design):
+        iter = next(global_counter1)
+        results.record(iter, float(Jcontrol.tape_value()) / 10.0,
+                       float(VolControl.tape_value()))
+        if iter % 10 == 0:
+            rho_viz_f.assign(rhofControl.tape_value())
+            fd.par_loop(
+                ("{[i] : 0 <= i < f.dofs}", "f[i, 0] = 1.0"),
+                dx(DECK),
+                {"f": (rho_viz_f, fd.WRITE)},
+                is_loopy_kernel=True,
+            )
+            phi_pvd.write(rho_viz_f)
+        return design
+
+    c = fda.Control(rho)
+    Jhat = fda.ReducedFunctional(J, c, derivative_cb_pre=deriv_cb)
+    Volhat = fda.ReducedFunctional(VolPen, c)
+
+    lb = 0.0
+    ub = 1.0
+    problem = fda.MinimizationProblem(
+        Jhat,
+        bounds=(lb, ub),
+        constraints=[ReducedInequality(Volhat, Vlimit, VolControl)],
+    )
+
+    parameters_mma = {
+        "move": 0.2,
+        "maximum_iterations": 200,
+        "m": 1,
+        "IP": 0,
+        "tol": 1e-6,
+        "accepted_tol": 1e-4,
+        "norm": "L2",
+        "gcmma": False,
+    }
+    solver = MMASolver(problem, parameters=parameters_mma)
+
+    results = RunResults(output_dir, RHO.dim(), W.dim(), float(total_vol), parameters_mma)
+    rho_opt = solver.solve()
+
+    # Export the final tape values; this does not perform another optimization.
+    with fda.stop_annotating():
+        rho_viz_f.assign(rhofControl.tape_value())
+        fd.par_loop(
+            ("{[i] : 0 <= i < f.dofs}", "f[i, 0] = 1.0"),
+            dx(DECK), {"f": (rho_viz_f, fd.WRITE)}, is_loopy_kernel=True,
+        )
+        displacement_viz = Ucontrol.tape_value().copy(deepcopy=True)
+        displacement_viz.rename("displacement")
+        fd.VTKFile(f"{output_dir}/final.pvd", target_continuity=fd.H1).write(
+            rho_viz_f, displacement_viz)
+        results.finish(solver, float(Jcontrol.tape_value()) / 10.0,
+                       float(VolControl.tape_value()))
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    compliance_bridge()

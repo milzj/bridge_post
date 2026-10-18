@@ -77,7 +77,7 @@ Line(22) = {7, 3};
 //+
 Line(23) = {4, 8};
 //+
-// Removed unused zero-length Line(24), rejected by current Gmsh.
+// Unused zero-length line removed for compatibility with current Gmsh.
 //+
 Line(25) = {2, 6};
 //+
@@ -145,6 +145,6 @@ Physical Volume(0) = {1};
 //+
 Physical Volume(1) = {2};
 //+
-Physical Surface(4) = {5, 6};
+Physical Surface(4) = {5};
 //+
-Physical Surface(5) = {4, 7};
+Physical Surface(5) = {4};

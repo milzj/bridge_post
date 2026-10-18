@@ -25,6 +25,7 @@ run_args=(run --rm --init
     --env "OMP_NUM_THREADS=${BRIDGE_THREADS:-1}"
     --env "OPENBLAS_NUM_THREADS=${BRIDGE_THREADS:-1}"
     --env "MKL_NUM_THREADS=${BRIDGE_THREADS:-1}")
+run_args+=(--env "BRIDGE_MPI_RANKS=${BRIDGE_MPI_RANKS:-1}")
 if [[ -n "${BRIDGE_PLATFORM:-}" ]]; then
     run_args+=(--platform "$BRIDGE_PLATFORM")
 fi

@@ -1,0 +1,38 @@
+{
+  "repository": "https://github.com/LLNL/pyMMAopt",
+  "commit": "934c0f304354fcb9430e2c326dedf557e3705eab",
+  "commit_date": "2021-08-11",
+  "reference_blog_date": "2021-11-21",
+  "license_file": "LICENSE",
+  "files": {
+    "__about__.py": {
+      "source_path": "pyMMAopt/__about__.py",
+      "sha256": "0b79542cc687ef4c7ac76a322fae83db8348faad3ed1c3d52b26785ccf74c879"
+    },
+    "__init__.py": {
+      "source_path": "pyMMAopt/__init__.py",
+      "sha256": "0de12ad32a74f75a6f833b48529d2960449513d3331469f9552e88404c2a5a6c"
+    },
+    "constraints.py": {
+      "source_path": "pyMMAopt/constraints.py",
+      "sha256": "cc273f2937bd4674e2d68282729a432756a810c446cf0c17a3c157ba76165380"
+    },
+    "mma.py": {
+      "source_path": "pyMMAopt/mma.py",
+      "sha256": "42858b2eddbfde15d35326742cbf3cd5cf753d7611569a0fe77cff44b5c6ebc0"
+    },
+    "mma_solver.py": {
+      "source_path": "pyMMAopt/mma_solver.py",
+      "sha256": "aa76334eaee8ef7abdf811c1d8086b2f365091f2c87b8a213f4f3db4d2512381"
+    },
+    "LICENSE": {
+      "source_path": "LICENSE",
+      "sha256": "8c5e1117a0973d5a3e6b3c7a43f7a8a0e0f2f5c7f472e02f8085acf68cdcea1a"
+    },
+    "NOTICE": {
+      "source_path": "NOTICE",
+      "sha256": "1c03a03406e4fc284f812456ef8a4866b8d5a94f57a85a8be7295a91b75c1918"
+    }
+  },
+  "compatibility_patches": []
+}

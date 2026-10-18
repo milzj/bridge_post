@@ -1,220 +1,196 @@
-# Bridge topology optimization with current Firedrake
+# Original bridge example with current Firedrake
 
-Run Miguel Salazar de Troya's three-dimensional bridge example with Firedrake
-2026.10.0 in Docker. Installation, meshing, optimization, and rendering all run in
-the container. Results are saved directly in your checkout so you can open the
-figures, report, and ParaView files on your computer.
-
-The original [blog post](https://www.migueloptimization.com/posts/open-source/)
-explains the bridge problem. This fork updates the implementation and adds a
-reproducible environment, numerical checks, and a graphical report.
-
-![Bridge design domain and computed material distribution](docs/bridge.png)
+Run Miguel Salazar de Troya's [bridge topology optimization example](https://www.migueloptimization.com/posts/open-source/)
+with Firedrake 2026.10.0 in Docker. This port preserves the original problem,
+mesh specification, starting density, and optimizer. The source changes are
+limited to compatibility with the current environment and saving results for
+inspection outside Docker.
 
 ## Start Docker
 
 Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on macOS
 or [Docker Engine](https://docs.docker.com/engine/install/) on Linux. No host
-Python, Firedrake, Gmsh, or graphics installation is required to run the example.
+installation of Python, Firedrake, Gmsh, or graphics libraries is needed.
 
-On macOS, open Docker Desktop and wait for its engine to be running. You can also
-start it from Terminal:
+On macOS, start Docker Desktop and wait for its engine to run:
 
 ```bash
 open -a Docker
 docker info
 ```
 
-On a Linux system that uses systemd, start the installed engine with
+On Linux with systemd, start the installed engine with
 `sudo systemctl start docker`. Your user must have permission to run `docker info`;
 follow Docker's installation instructions for your system.
 
-Use the native architecture of your computer. The scripts support Apple Silicon
-and x86-64 without forcing CPU emulation. Allocate at least 8 GB of memory to
-Docker Desktop for the default example. Finer three-dimensional meshes require
-more memory and time.
+The scripts use your computer's native architecture, including Apple Silicon.
+This is the original three-dimensional mesh, which requires substantially more
+memory and time than a small demonstration case. If Docker runs out of memory,
+increase its memory allocation in Docker Desktop settings.
 
 ## Build and run
 
-Open a terminal in your clone of this fork:
+In a terminal, change into your clone of this fork, then run:
 
 ```bash
 ./scripts/build.sh
-./scripts/verify.sh
 ./scripts/run.sh
+./scripts/verify.sh
 ./scripts/open.sh
 ```
 
-The build downloads a pinned official Firedrake image and installs the additional
-packages in [Dockerfile](Dockerfile) and [requirements.txt](requirements.txt).
-`verify.sh` runs a small, complete optimization with finite-difference sensitivity
-checks, preceded by geometry, filter, and linear solver consistency checks.
-`run.sh` runs the default bridge optimization and produces the report in
-`output/demo/`. The defaults are mesh size `0.04`, 200 MMA steps, and a 15%
-design-region volume limit. `open.sh` opens that report in your host web browser.
+`build.sh` builds the pinned environment from [Dockerfile](Dockerfile) and
+[requirements.txt](requirements.txt). `run.sh` generates the mesh from the
+original `bridge.geo`, runs the original optimization, and renders the results
+in `output/demo/`. `verify.sh` checks the environment, the vendored optimizer,
+and the saved run. It does not substitute a coarser mesh or a different starting
+point. `open.sh` opens the saved graphical report in your host web browser.
 
-The initial image download is large. The first solve also compiles finite element
-kernels. Leave the terminal running until the optimizer and renderer finish.
-You can interrupt a run with Ctrl-C. Completed outputs stay in your checkout.
+The image download is large, and the first solve compiles finite element
+kernels. Leave the terminal running until optimization and rendering finish.
+Ctrl-C interrupts a run; files already written remain in your checkout.
 
-All solver options are available through:
+## What is preserved
 
-```bash
-./scripts/run.sh --help
-```
+The [original bridge source](https://github.com/salazardetroya/bridge_post)
+defines deterministic compliance minimization with linear elasticity, a DG0
+Helmholtz filter, RAMP interpolation, a solid deck, and a volume constraint.
+The solve uses one quarter of the bridge. This port retains:
 
-For example, choose a different mesh and output directory:
+| Setting | Original value retained |
+| --- | --- |
+| Gmsh characteristic size | `0.015` in `bridge.geo` |
+| Geometry and physical surfaces | Original definitions, including symmetry surface `4 = {5}` and `5 = {4}` |
+| Initial design density | `0.5` |
+| Material volume limit | `0.15` of the design region |
+| Helmholtz coefficient | `2e-4` multiplying the interior-face jump term |
+| RAMP parameters | `ramp_p=10.0`, `val_0=1e-5` |
+| Objective | `10 * compliance` |
+| Optimizer | Original 2021 `pyMMAopt`, with its mass-weighted `L2` formulation |
+| MMA move limit | `0.2` |
+| MMA iteration parameter | `maximum_iterations=200` |
+| MMA tolerances | `tol=1e-6`, `accepted_tol=1e-4` |
+| MMA mode | `gcmma=False`, `IP=0`, one constraint |
+| Linear solver parameters | Original elasticity and filter configurations |
 
-```bash
-./scripts/run.sh --mesh-size 0.08 --max-iterations 120 --output-dir output/my-bridge
-./scripts/open.sh output/my-bridge
-```
+The upstream repository supplies `bridge.geo`, rather than an archived generated
+mesh. The pinned Gmsh installation generates a mesh using that original size and
+geometry; no command-line mesh-size override is applied. Gmsh versions can
+produce different tetrahedral connectivity from the same specification.
 
-Smaller `--mesh-size` values produce finer meshes. A run with only a few iterations
-checks that the software works; the resulting material distribution is not a
-converged bridge design. Use a separate output directory when comparing runs.
+The blog describes a 100-iteration run. The code in the supplied fork sets
+`maximum_iterations=200`; its original loop can perform 201 MMA updates. This
+port retains that behavior. A completed run therefore need not be identical to
+the image in the post or meet the optimizer's stopping tolerance.
+
+## Compatibility changes
+
+Current Firedrake provides its adjoint interface as `firedrake.adjoint`.
+The port updates that import, annotation initialization, interpolation and VTK
+output APIs, and the derivative callback's return value. The optimization
+continues to use the original adjoint formulation and optimizer.
+
+The original `pyMMAopt` revision is included unchanged under
+[`vendor/pyMMAopt`](vendor/pyMMAopt). Its upstream revision and file hashes are
+recorded in [UPSTREAM.json](vendor/pyMMAopt/UPSTREAM.json). This avoids fetching
+a newer optimizer implementation when rebuilding the environment.
+
+Current Gmsh rejects the unused zero-length declaration `Line(24) = {6, 6}`.
+Only that declaration is removed from `bridge.geo`; it is not referenced by
+any surface or volume. Geometry, mesh size, and boundary labels are preserved.
+
+The [source verification](docs/source-verification.json) compares the scientific
+Python syntax tree with the original commit after an explicit compatibility
+whitelist. It also checks original solver files, geometry, and optimizer hashes.
+The checker rejects changes to mesh size, initialization, forms, or parameters.
+
+The remaining additions are Docker helpers and exports for the report,
+optimization history, and final density. They do not change the optimization
+parameters. No coarse-mesh or alternative-initial-density presets are supplied.
 
 ## Open results outside Docker
 
-The scripts mount the repository at `/workspace` inside the container. Therefore
-`/workspace/output/demo` is exactly `output/demo` in your host checkout. No
-`docker cp` command is needed, and deleting a container does not delete results.
-The container runs as your host user so its output files can be edited normally
-on Linux as well as macOS.
+The container mounts your checkout at `/workspace`. Consequently,
+`/workspace/output/demo` is the `output/demo` folder on your computer. No
+`docker cp` command is needed. Results remain after the container exits, and
+the container writes files as your host user.
 
-- Open `output/demo/report.html` in a browser using `./scripts/open.sh` or your
-  file manager. The report includes the bridge illustration and optimization
-  history.
+- Open `output/demo/report.html` using `./scripts/open.sh` or your file manager.
 - Open `output/demo/bridge.png` and `output/demo/convergence.png` in Preview on
-  macOS or your usual image viewer.
-- Open `output/demo/final.pvd` or `output/demo/bridge_evolution.pvd` in a host installation of
-  [ParaView](https://www.paraview.org/download/) for the original finite element
-  fields. Keep its accompanying data directory alongside it.
-- `output/verification/` contains the small verification run. Open it with
-  `./scripts/open.sh output/verification`.
+  macOS or your preferred image viewer.
+- Open `output/demo/final.pvd` or `output/demo/bridge_evolution.pvd` with a host
+  installation of [ParaView](https://www.paraview.org/download/). Keep the
+  corresponding data folder beside each `.pvd` file.
+- Inspect `output/demo/history.csv` and `output/demo/summary.json` for the saved
+  optimization history and run metadata.
 
-No desktop display server is forwarded into the container. Static figures and
-the report are generated using offscreen rendering.
-
-To regenerate the figures from saved results, without rerunning optimization:
+To regenerate the illustration and report from saved output:
 
 ```bash
 ./scripts/render.sh output/demo
 ./scripts/open.sh output/demo
 ```
 
-The HTML report is self-contained and works offline. Its three-dimensional
-bridge view can be rotated and zoomed in your browser. The full bridge is
-reconstructed by reflecting the computed quarter across its two symmetry
-planes; the image also identifies the quarter used in the finite element solve.
+Rendering runs offscreen inside Docker. The HTML report is self-contained and
+works offline; its three-dimensional view supports rotation and zooming.
 
-## Model and numerical checks
-
-This is a deterministic, three-dimensional compliance-minimization problem with
-linear elasticity, a Helmholtz density filter, RAMP material interpolation, a
-fixed solid bridge deck, and a material volume limit. The finite element solve
-uses one quarter of the bridge with symmetry boundary conditions.
-
-The default volume fraction is 0.15 in the design domain. You can change it with
-`--volume-fraction`. The filter length is controlled by `--filter-radius`.
-These parameters change the optimization problem; retain the defaults when
-reproducing the supplied example.
-
-The filter retains the original discontinuous, piecewise-constant density and
-interior-face jump discretization. Its default radius is `sqrt(0.0002)`, so the
-squared coefficient in the Helmholtz operator matches the original script.
-
-Two geometry fixes remove a zero-length line and apply the symmetry conditions
-to the deck as well as the design domain. The optimizer starts at the feasible
-volume fraction instead of the original 0.5 density. Compliance is normalized
-by its initial value during optimization; the original constant factor of 10
-has no effect on the minimizing design and is omitted.
-
-The obsolete `pyMMAopt` interface is replaced with an adapter to
-[mmapy](https://pypi.org/project/mmapy/). Objective and constraint derivatives are
-assembled explicitly from the self-adjoint elasticity and filter equations.
-The `--verify-gradient` option checks both against directional finite
-differences. This implementation does not require an old Firedrake adjoint
-package.
-
-To check the initial state and derivatives without an optimization run:
-
-```bash
-./scripts/run.sh --mesh-size 0.15 --verify-gradient --check-only --no-render --output-dir output/gradient-check
-```
-
-Use `--no-render` to omit rendering, and `--solver direct` to select a direct
-solver instead of the default FGMRES/GAMG iterative solver. The verification
-helper exits with a nonzero status when the solver, numerical checks, or
-rendering fails.
-
-## Verified reference run
-
-The Docker build, verification helper, and complete default optimization were
-run on Apple Silicon using Firedrake 2026.10.0. The reference run used 39,656
-tetrahedra and 24,099 displacement degrees of freedom. Compliance fell from
-81.1610 to 9.9986 (87.68%) with a final design-region material fraction of
-0.1499998. The 200-step iteration limit was reached before the density-change
-tolerance; these results do not claim optimizer convergence.
-
-[Reference metadata](docs/reference-summary.json) and
-[independent numerical checks](docs/numerical-checks.json) record the measured
-values. The checks cover CAD marker measures, constant-density and mass
-preservation by the filter, direct/iterative solver agreement, and reduced
-objective/volume derivatives at a nonuniform density. The default run also
-passed its directional gradient check with second-order Taylor remainders.
-The solve and gradient check took about 133 seconds on the test machine;
-image download, environment build, and rendering take additional time.
-
-![Compliance and material histories from the reference run](docs/convergence.png)
+The illustration reflects the computed quarter across the two symmetry planes
+to show the full bridge. It uses a density isosurface at `0.8` with smoothing,
+following the visualization described in the blog. These are display settings;
+they do not alter the mesh, density field, or optimizer. The VTK files contain
+the saved density for inspection using other display settings.
 
 ## Environment controls
 
-The normal commands use one BLAS/OpenMP thread to avoid oversubscription. You can
-limit the container's CPU or memory allocation, or override the local image name:
+The scripts use one BLAS/OpenMP thread by default. You can limit the container's
+CPU or memory allocation:
 
 ```bash
-BRIDGE_CPUS=4 BRIDGE_MEMORY=8g ./scripts/run.sh
-BRIDGE_THREADS=2 ./scripts/run.sh --mesh-size 0.08 --output-dir output/two-threads
+BRIDGE_CPUS=4 BRIDGE_MEMORY=12g ./scripts/run.sh
 ```
 
-`BRIDGE_IMAGE` changes the local image tag for both `build.sh` and `run.sh`.
-`BRIDGE_PLATFORM` can explicitly request `linux/arm64` or `linux/amd64`; normally
-leave it unset to use your native CPU architecture. Rebuild after changing the
-requested platform.
+`BRIDGE_MPI_RANKS` selects the number of MPI processes (default `1`); this only
+partitions the original mesh. Use fewer processes if Docker exhausts its memory.
+For example, `BRIDGE_MPI_RANKS=4 ./scripts/run.sh` uses four processes.
 
-For an arbitrary command in the same mounted environment:
+`BRIDGE_THREADS` changes the thread count. `BRIDGE_IMAGE` changes the local image
+tag used by both `build.sh` and the run helpers. `BRIDGE_PLATFORM` can request
+`linux/arm64` or `linux/amd64`; normally leave it unset to use the native
+architecture. Rebuild after changing the requested platform.
+
+To inspect the same environment interactively:
 
 ```bash
 ./scripts/container.sh python3 -c 'import importlib.metadata; print(importlib.metadata.version("firedrake"))'
 ./scripts/container.sh bash
 ```
 
-The image pins the Firedrake release and additional Python package versions.
-Runtime output and generated meshes are excluded from Git. A new Docker image
-is only necessary when the environment changes; Python source changes are used
-immediately through the bind mount.
+Runtime output and generated meshes are excluded from Git. Source files are
+mounted directly, so source edits do not require an image rebuild. Rebuild
+when changing environment dependencies.
 
 ## Troubleshooting
 
-**Cannot connect to Docker:** start Docker Desktop or your Docker Engine service,
-then verify `docker info` works in the same terminal.
+**Cannot connect to Docker:** start Docker Desktop or the Docker Engine service,
+then verify that `docker info` works in the same terminal.
 
-**Container is killed, often with exit code 137:** increase Docker Desktop's
-memory allocation or try a larger `--mesh-size` such as `0.10` or `0.15`.
+**Container killed, often with exit code 137:** increase Docker Desktop's memory
+allocation. Preserve the original mesh and optimization settings when
+reproducing this example.
 
-**No report yet:** wait for the renderer to finish and check that you used the
-same output directory with `run.sh` and `open.sh`. If you requested `--no-render`
-there is no graphical report until you run `./scripts/render.sh` for that output
-directory.
+**No report yet:** wait for optimization and rendering to finish. The output
+directory must contain `final.pvd`, its companion data folder, `history.csv`,
+and `summary.json` before you can regenerate the report with `render.sh`.
 
-**Opening results on a headless Linux host:** copy the output directory to a
-computer with a browser or image viewer. The report and figures are ordinary
-files.
+**Opening output from a headless Linux host:** copy the complete output folder
+to a computer with a browser, image viewer, or ParaView.
 
 ## Attribution
 
 The original bridge example is by Miguel Salazar de Troya. See the original
-[repository](https://github.com/salazardetroya/bridge_post) and [LICENSE](LICENSE).
-The Docker environment installs third-party packages under their respective
-licenses; in particular, `mmapy` is GPL-3.0 licensed.
+[repository](https://github.com/salazardetroya/bridge_post),
+[blog post](https://www.migueloptimization.com/posts/open-source/), and
+[LICENSE](LICENSE). The vendored `pyMMAopt` code retains its
+[GPL-2.0 license](vendor/pyMMAopt/LICENSE) and [NOTICE](vendor/pyMMAopt/NOTICE).
+The Docker environment includes third-party packages under their respective
+licenses.
