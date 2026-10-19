@@ -21,10 +21,9 @@ Install Docker and start its engine (on macOS: `open -a Docker`). From this clon
 ./scripts/open.sh
 ```
 
-The Dockerfile extends Firedrake's **official** `firedrake-vanilla-default:2026.10.0`
-image; it does not rebuild Firedrake. It adds Gmsh, the original
-[pyMMAopt commit](https://github.com/LLNL/pyMMAopt/tree/934c0f304354fcb9430e2c326dedf557e3705eab),
-and plotting dependencies. pyMMAopt is installed unchanged directly from upstream.
+The Dockerfile uses the official `firedrake-vanilla-default:2026.10.0` image
+and installs Gmsh, [pyMMAopt](https://github.com/LLNL/pyMMAopt/tree/934c0f304354fcb9430e2c326dedf557e3705eab),
+and plotting dependencies.
 
 To use the original mesh resolution (requires more memory):
 
