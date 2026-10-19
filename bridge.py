@@ -13,9 +13,6 @@ from firedrake import (
     tr,
     Identity,
 )
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).with_name("vendor")))
 from pyMMAopt import MMASolver, ReducedInequality
 import itertools
 import argparse

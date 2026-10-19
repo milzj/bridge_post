@@ -10,6 +10,7 @@ import difflib
 import hashlib
 import importlib
 from importlib.metadata import version
+from importlib.util import find_spec
 import json
 import math
 from pathlib import Path
@@ -28,9 +29,6 @@ EXPECTED_OPTIMIZER = {
 # These additions only export existing tape values. Listing their exact syntax
 # prevents the source check from silently accepting a changed computational form.
 EXTRA_TOP_LEVEL = [
-    'import sys',
-    'from pathlib import Path',
-    'sys.path.insert(0, str(Path(__file__).with_name("vendor")))',
     'from run_results import RunResults',
     'fda.continue_annotation()',
 ]
@@ -157,7 +155,7 @@ def scientific_source_check():
                     'concrete coordinate interpolation Functions',
                     'VTKFile replaces File with original H1 export',
                     'derivative callback returns controls',
-                    'vendor import path and exact read-only diagnostic exports',
+                    'exact read-only diagnostic exports',
                 ], optimizer_parameters=EXPECTED_OPTIMIZER)
 
 
@@ -179,23 +177,34 @@ def file_source_checks():
             'Geometry differs from original beyond removal of unused zero-length Line(24).')
     checks['bridge.geo'] = dict(passed=True, mesh_size=.015,
                                 allowed_change='Remove unused zero-length Line(24); comments ignored.')
-    package = ROOT/'vendor'/'pyMMAopt'
-    provenance = json.loads((package/'UPSTREAM.json').read_text())
+    checkout = Path('/opt/pyMMAopt')
+    provenance = json.loads((ROOT/'docs'/'pyMMAopt-source.json').read_text())
     require(provenance['commit'] == '934c0f304354fcb9430e2c326dedf557e3705eab',
-            'Vendored optimizer is not pinned to the original blog-date revision.')
+            'Optimizer is not pinned to the original blog-date revision.')
     require(not provenance['compatibility_patches'],
             'Unexpected changes recorded to the original optimizer.')
-    hashes = {}
+    revision = subprocess.run(
+        ['git', '-c', f'safe.directory={checkout}', '-C', str(checkout), 'rev-parse', 'HEAD'],
+        capture_output=True, text=True, check=True).stdout.strip()
+    require(revision == provenance['commit'], 'Installed optimizer checkout has changed.')
+    spec = find_spec('pyMMAopt')
+    require(spec is not None, 'The pinned upstream optimizer is not installed.')
+    package = Path(spec.origin).resolve().parent
+    hashes, installed = {}, {}
     for name, entry in provenance['files'].items():
-        digest = hashlib.sha256((package/name).read_bytes()).hexdigest()
-        require(digest == entry['sha256'], f'Vendored optimizer file changed: {name}.')
+        digest = hashlib.sha256((checkout/entry['source_path']).read_bytes()).hexdigest()
+        require(digest == entry['sha256'], f'Upstream optimizer file changed: {name}.')
         hashes[name] = digest
-    checks['pyMMAopt'] = dict(passed=True, commit=provenance['commit'], sha256=hashes)
+        if name.endswith('.py'):
+            digest = hashlib.sha256((package/name).read_bytes()).hexdigest()
+            require(digest == entry['sha256'], f'Installed optimizer file changed: {name}.')
+            installed[name] = digest
+    checks['pyMMAopt'] = dict(passed=True, commit=revision, source_sha256=hashes,
+                              installed_sha256=installed)
     return checks
 
 
 def dependency_checks():
-    sys.path.insert(0, str(ROOT/'vendor'))
     # Application options are unrelated to PETSc's own option parser.
     saved_argv = sys.argv
     try:
@@ -206,8 +215,7 @@ def dependency_checks():
     finally:
         sys.argv = saved_argv
     require(version('firedrake') == '2026.10.0', 'Expected the pinned current Firedrake release.')
-    require(Path(loaded['pyMMAopt'].__file__).resolve().parent == ROOT/'vendor'/'pyMMAopt',
-            'Python imported an optimizer other than the pinned original package.')
+    require(version('pyMMAopt') == '0.0.1', 'Unexpected installed optimizer version.')
     gmsh = subprocess.run(['gmsh', '--version'], capture_output=True, text=True, check=True)
     return dict(passed=True, firedrake=version('firedrake'), numexpr=version('numexpr'),
                 pyMMAopt=loaded['pyMMAopt'].__version__,
