@@ -6,8 +6,6 @@ by Miguel Salazar de Troya, updated for Firedrake 2026.10.0.
 ## Changes
 
 - Updated Firedrake/adjoint and VTK APIs; removed one unused zero-length Gmsh line.
-- Retained the original initial density (`0.5`), filter, elasticity problem,
-  solver settings, and MMA optimizer.
 - Default mesh size is **0.03**, coarsened from **0.015** for local memory limits.
   The original geometry file is retained. Two MPI processes are used by default.
 - Added Docker run scripts and exports for figures, history, and an HTML report.
