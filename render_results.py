@@ -307,6 +307,10 @@ def static_illustration(surface: pv.PolyData, output: Path, summary: dict, level
     draw.text((85, 101), "A bridge shaped by forces", font=font(67, True), fill=NAVY)
     draw.text((90, 195), "Linear elasticity  /  Helmholtz density filter  /  volume-constrained optimization",
               font=font(27), fill="#59707f")
+    if 'mesh_size' in summary:
+        mesh_label = (f"Mesh size {summary['mesh_size']:g} (original {summary.get('original_mesh_size', .015):g})"
+                      f"  /  {summary.get('cells', 0):,} tetrahedra  /  initial density 0.5")
+        draw.text((90, 239), mesh_label, font=font(22), fill="#59707f")
     for i, scene in enumerate(scenes):
         page.paste(scene, (i * 1200, 340))
     draw = ImageDraw.Draw(page)
@@ -450,9 +454,15 @@ def write_report(surface: pv.PolyData, output: Path, summary: dict, history: dic
                            for label, value in cards)
     run_status = ""
     if "converged" in summary:
-        status = "Convergence tolerance reached" if summary["converged"] else "Convergence tolerance not yet reached"
+        status = "Convergence tolerance reached" if summary["converged"] else "Iteration limit reached; convergence tolerance not reached"
         reason = str(summary.get("stopping_reason", "")).replace("_", " ")
         run_status = f'<p class="hint"><strong>Run status:</strong> {status}. Stopping reason: {html.escape(reason)}.</p>'
+    mesh_status = ""
+    if "mesh_scale" in summary:
+        mesh_status = (f'<p class="hint"><strong>Mesh:</strong> '
+                       f'{summary["cells"]:,} tetrahedra; characteristic size {summary["mesh_size"]:g} '
+                       f'(original {summary["original_mesh_size"]:g}; scale {summary["mesh_scale"]:g}). '
+                       f'{html.escape(summary["mesh_note"])}</p>')
     convergence_html = (f'<section class="card"><h2>Optimization history</h2><img alt="Compliance and volume histories" '
                         f'src="{image_uri(output / "convergence.png")}"></section>') if has_history else ""
     summary_html = html.escape(json.dumps(summary, indent=2))
@@ -479,6 +489,7 @@ footer{{font-size:12px;color:var(--muted);border-top:1px solid var(--line);paddi
 A Helmholtz filter regularizes the density field. The surface below visualizes the computed finite-element density.</p>
 <div class="metrics">{metrics_html}</div>
 {run_status}
+{mesh_status}
 <section class="card"><h2>Explore the computed structure</h2><p class="hint">Drag to rotate · scroll to zoom · click a legend item to hide it · use the camera button to save a view. Works offline.</p>
 {chart}<p class="hint">The full bridge is the computed quarter reflected across x = 0 and y = 1.
 {html.escape(display_detail)} The displayed geometry has not undergone a separate mechanical validation.</p></section>

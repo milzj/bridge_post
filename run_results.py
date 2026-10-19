@@ -17,6 +17,10 @@ class RunResults:
         self.design_volume = design_volume
         self.parameters = {key: parameters[key] for key in (
             'move', 'maximum_iterations', 'm', 'IP', 'tol', 'accepted_tol', 'norm', 'gcmma')}
+        mesh_settings = Path('mesh-settings.json')
+        self.mesh_settings = (json.loads(mesh_settings.read_text()) if mesh_settings.exists() else
+                              dict(original_mesh_size=0.015, mesh_scale=1.0, mesh_size=0.015,
+                                   mesh_note='Original mesh specification.'))
         self.started = time.monotonic()
         self.history = []
 
@@ -36,7 +40,10 @@ class RunResults:
         summary = dict(
             firedrake_version=version('firedrake'), cells=self.cells,
             displacement_dofs=self.displacement_dofs, mpi_ranks=COMM_WORLD.size,
-            iterations=solver.loop, initial_density=0.5, mesh_size=0.015,
+            iterations=solver.loop, initial_density=0.5,
+            original_mesh_size=self.mesh_settings['original_mesh_size'],
+            mesh_size=self.mesh_settings['mesh_size'], mesh_scale=self.mesh_settings['mesh_scale'],
+            mesh_note=self.mesh_settings['mesh_note'],
             initial_compliance=self.history[0]['compliance'],
             final_compliance=compliance, volume_fraction=volume/self.design_volume,
             volume_limit=0.15, design_volume=self.design_volume,

@@ -2,7 +2,7 @@
 """Verify that the original scientific model and optimizer remain unchanged.
 
 The default checks source compatibility and dependencies without running another
-optimization. Use --output-dir for additional checks of a completed original run.
+optimization. Use --output-dir for additional checks of a completed run with its explicitly recorded mesh resolution.
 """
 import argparse
 import ast
@@ -217,7 +217,7 @@ def dependency_checks():
 def completed_run_checks(directory):
     directory = directory.resolve()
     summary = json.loads((directory/'summary.json').read_text())
-    for key, expected in dict(mesh_size=.015, initial_density=.5,
+    for key, expected in dict(original_mesh_size=.015, initial_density=.5,
                               filter_coefficient=2e-4, objective_scale=10.,
                               volume_limit=.15, design_volume=.49).items():
         require(math.isclose(summary[key], expected, rel_tol=1e-10, abs_tol=1e-10),
@@ -237,6 +237,21 @@ def completed_run_checks(directory):
     require(summary['final_compliance'] > 0, 'Final compliance must be positive.')
     converged = summary['optimizer_change'] <= EXPECTED_OPTIMIZER['tol']
     require(summary['converged'] == converged, 'Convergence flag disagrees with original stopping test.')
+    require(converged or summary['iterations'] == EXPECTED_OPTIMIZER['maximum_iterations']+1,
+            'Run stopped before the original tolerance or iteration limit.')
+    expected_reason = 'original_change_tolerance' if converged else 'original_iteration_limit'
+    require(summary['stopping_reason'] == expected_reason,
+            'Stopping reason disagrees with the original stopping test.')
+    settings = json.loads((directory/'mesh-settings.json').read_text())
+    scale = summary['mesh_scale']
+    require(math.isfinite(scale) and scale >= 1, 'Unexpected mesh scaling factor.')
+    require(math.isclose(summary['mesh_size'], .015*scale, rel_tol=1e-12),
+            'Mesh size does not match the recorded reduction.')
+    for key in ['original_mesh_size', 'mesh_scale', 'mesh_size', 'mesh_note']:
+        require(summary[key] == settings[key], f'Mesh metadata disagree for {key}.')
+    require(0 < summary['cells'] <= 681109, 'Mesh must use the original or a reduced resolution.')
+    if scale == 1:
+        require(summary['cells'] == 681109, 'Unexpected original-resolution cell count.')
     import csv
     with (directory/'history.csv').open(newline='') as handle:
         history = list(csv.DictReader(handle))
@@ -266,7 +281,8 @@ def completed_run_checks(directory):
     grid = reader.read()
     while isinstance(grid, pv.MultiBlock):
         grid = grid[0] if len(grid) == 1 else grid.combine()
-    require(grid.n_cells > 0, 'Empty final VTK dataset.')
+    require(grid.n_cells == summary['cells'],
+            'Saved VTK cell count disagrees with the completed original mesh.')
     require('rho' in grid.array_names and 'displacement' in grid.array_names,
             'Missing final original density or displacement fields.')
     for name in grid.array_names:
@@ -282,12 +298,13 @@ def completed_run_checks(directory):
                 f'Missing rendered output: {name}.')
     return dict(passed=True, directory=str(directory), cells=summary['cells'],
                 mpi_ranks=summary['mpi_ranks'], iterations=summary['iterations'],
+                mesh_scale=scale, mesh_size=summary['mesh_size'], mesh_note=summary['mesh_note'],
                 final_compliance=summary['final_compliance'],
                 volume_fraction=summary['volume_fraction'],
                 converged=summary['converged'], stopping_reason=summary['stopping_reason'],
                 saved_density_range=[float(density.min()), float(density.max())],
                 mesh_sha256=summary['mesh_sha256'],
-                interpretation='Verifies the original setup and completed output; no claim of a unique topology.')
+                interpretation='Verifies the original model with recorded mesh resolution and completed output; no claim of a unique topology.')
 
 
 def main():

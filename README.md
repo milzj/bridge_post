@@ -2,9 +2,11 @@
 
 Run Miguel Salazar de Troya's [bridge topology optimization example](https://www.migueloptimization.com/posts/open-source/)
 with Firedrake 2026.10.0 in Docker. This port preserves the original problem,
-mesh specification, starting density, and optimizer. The source changes are
-limited to compatibility with the current environment and saving results for
-inspection outside Docker.
+starting density, and optimizer. **The default run uses a coarser mesh to fit
+local resources: characteristic size `0.03`, twice the original `0.015`.**
+This mesh reduction was explicitly authorized; no other model or optimizer
+parameters are changed. The original `bridge.geo` specification is retained,
+and `BRIDGE_MESH_SCALE=1` restores its original resolution.
 
 ## Start Docker
 
@@ -24,9 +26,9 @@ On Linux with systemd, start the installed engine with
 follow Docker's installation instructions for your system.
 
 The scripts use your computer's native architecture, including Apple Silicon.
-This is the original three-dimensional mesh, which requires substantially more
-memory and time than a small demonstration case. If Docker runs out of memory,
-increase its memory allocation in Docker Desktop settings.
+The default three-dimensional mesh is reduced for a laptop. The optional
+original-resolution run requires substantially more memory and time. If Docker
+runs out of memory, increase its memory allocation in Docker Desktop settings.
 
 ## Build and run
 
@@ -41,14 +43,38 @@ In a terminal, change into your clone of this fork, then run:
 
 `build.sh` builds the pinned environment from [Dockerfile](Dockerfile) and
 [requirements.txt](requirements.txt). `run.sh` generates the mesh from the
-original `bridge.geo`, runs the original optimization, and renders the results
-in `output/demo/`. `verify.sh` checks the environment, the vendored optimizer,
-and the saved run. It does not substitute a coarser mesh or a different starting
-point. `open.sh` opens the saved graphical report in your host web browser.
+original `bridge.geo` with the documented mesh scale, runs the original
+optimization, and renders the results in `output/demo/`. `verify.sh` checks the environment, the vendored optimizer,
+and the saved run, including its recorded mesh scale. The initial density
+remains the original `0.5`. `open.sh` opens the saved graphical report in your
+host web browser.
 
 The image download is large, and the first solve compiles finite element
 kernels. Leave the terminal running until optimization and rendering finish.
 Ctrl-C interrupts a run; files already written remain in your checkout.
+
+## Verified local result
+
+The default configuration completed all **201 MMA updates** on Apple Silicon
+with Firedrake 2026.10.0, two MPI processes, and **91,360 tetrahedra**. The saved
+optimization/export time was about 11.4 minutes. The final compliance was
+`10.0573265`, and the design-region material fraction was `0.14999796`.
+The run reached the original iteration limit; it did **not** reach the original
+`1e-6` change tolerance.
+
+The completed-run checks passed for source faithfulness, optimizer hashes,
+recorded mesh reduction, initial density, volume limit, finite exported density
+and displacement, and matching mesh/VTK cell counts. See the saved
+[verification](docs/verification.json), [run summary](docs/run-summary.json),
+and [mesh settings](docs/mesh-settings.json).
+
+![Computed bridge, with the local mesh reduction labeled](docs/bridge.png)
+
+[Optimization history figure](docs/convergence.png). These figures come from the
+computed fields; the surface smoothing is only for visualization. Mesh reduction
+can change the topology, so this is not a claim to reproduce the blog image
+exactly. The rejected earlier port's output has been archived under
+`output/previous-port/` locally and is not used for this validation.
 
 ## What is preserved
 
@@ -57,9 +83,9 @@ defines deterministic compliance minimization with linear elasticity, a DG0
 Helmholtz filter, RAMP interpolation, a solid deck, and a volume constraint.
 The solve uses one quarter of the bridge. This port retains:
 
-| Setting | Original value retained |
+| Setting | Configuration (original unless noted) |
 | --- | --- |
-| Gmsh characteristic size | `0.015` in `bridge.geo` |
+| Gmsh characteristic size | Original `0.015` in `bridge.geo`; default run multiplies it by `2` to use `0.03` |
 | Geometry and physical surfaces | Original definitions, including symmetry surface `4 = {5}` and `5 = {4}` |
 | Initial design density | `0.5` |
 | Material volume limit | `0.15` of the design region |
@@ -75,13 +101,27 @@ The solve uses one quarter of the bridge. This port retains:
 
 The upstream repository supplies `bridge.geo`, rather than an archived generated
 mesh. The pinned Gmsh installation generates a mesh using that original size and
-geometry; no command-line mesh-size override is applied. Gmsh versions can
-produce different tetrahedral connectivity from the same specification.
+geometry. The run script explicitly applies `-clscale 2` by default, reducing
+the mesh resolution without changing the geometry or boundary labels. It saves
+this choice in `mesh-settings.json` and `summary.json`. Gmsh versions can produce
+different tetrahedral connectivity from the same specification.
+
+To run the original mesh resolution, with the same initial density and optimizer:
+
+```bash
+BRIDGE_MESH_SCALE=1 ./scripts/run.sh output/original
+./scripts/verify.sh output/original
+./scripts/open.sh output/original
+```
+
+That fine mesh contains 681,109 tetrahedra with the pinned Gmsh version and can
+exceed a laptop's Docker memory allocation. It is not the default local run.
 
 The blog describes a 100-iteration run. The code in the supplied fork sets
 `maximum_iterations=200`; its original loop can perform 201 MMA updates. This
-port retains that behavior. A completed run therefore need not be identical to
-the image in the post or meet the optimizer's stopping tolerance.
+port retains that behavior. The original initial density of `0.5` exceeds the
+`0.15` volume limit, so compliance can initially rise as MMA removes material.
+A completed run therefore need not be identical to the image in the post or meet the optimizer's stopping tolerance.
 
 ## Compatibility changes
 
@@ -102,11 +142,14 @@ any surface or volume. Geometry, mesh size, and boundary labels are preserved.
 The [source verification](docs/source-verification.json) compares the scientific
 Python syntax tree with the original commit after an explicit compatibility
 whitelist. It also checks original solver files, geometry, and optimizer hashes.
-The checker rejects changes to mesh size, initialization, forms, or parameters.
+The checker rejects changes to the original mesh size in `bridge.geo`,
+initialization, forms, or parameters; the run check records the allowed mesh scaling.
 
 The remaining additions are Docker helpers and exports for the report,
-optimization history, and final density. They do not change the optimization
-parameters. No coarse-mesh or alternative-initial-density presets are supplied.
+optimization history, and final density. The mesh reduction is marked in
+`scripts/run.sh` and `scripts/run_in_container.sh`; it is the only intentional
+numerical departure from the original example. The original initial density,
+filter, elasticity problem, and optimization parameters are retained.
 
 ## Open results outside Docker
 
@@ -149,9 +192,14 @@ CPU or memory allocation:
 BRIDGE_CPUS=4 BRIDGE_MEMORY=12g ./scripts/run.sh
 ```
 
-`BRIDGE_MPI_RANKS` selects the number of MPI processes (default `1`); this only
-partitions the original mesh. Use fewer processes if Docker exhausts its memory.
-For example, `BRIDGE_MPI_RANKS=4 ./scripts/run.sh` uses four processes.
+`BRIDGE_MESH_SCALE` multiplies the original mesh size: the default is `2`,
+and `1` restores the original resolution. Values must be finite and at least `1`.
+The scripts print and record the chosen scale.
+
+`BRIDGE_MPI_RANKS` selects the number of MPI processes (default `2` for the local run); this only
+partitions the generated mesh. Use fewer processes if Docker exhausts its memory.
+For example, `BRIDGE_MPI_RANKS=1 ./scripts/run.sh` uses one process.
+The default two-process run is the configuration used for the saved validation.
 
 `BRIDGE_THREADS` changes the thread count. `BRIDGE_IMAGE` changes the local image
 tag used by both `build.sh` and the run helpers. `BRIDGE_PLATFORM` can request
@@ -175,8 +223,9 @@ when changing environment dependencies.
 then verify that `docker info` works in the same terminal.
 
 **Container killed, often with exit code 137:** increase Docker Desktop's memory
-allocation. Preserve the original mesh and optimization settings when
-reproducing this example.
+allocation or use fewer MPI processes. The default mesh scale `2` reduces
+memory demand. Changing mesh resolution can affect the optimized topology;
+the saved metadata always records that choice.
 
 **No report yet:** wait for optimization and rendering to finish. The output
 directory must contain `final.pvd`, its companion data folder, `history.csv`,

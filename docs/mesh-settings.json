@@ -1,0 +1,6 @@
+{
+  "original_mesh_size": 0.015,
+  "mesh_scale": 2.0,
+  "mesh_size": 0.03,
+  "mesh_note": "User-authorized coarser mesh for local resources; all other model and optimizer settings retain their original values."
+}

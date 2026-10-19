@@ -1,0 +1,39 @@
+{
+  "firedrake_version": "2026.10.0",
+  "cells": 91360,
+  "displacement_dofs": 52485,
+  "mpi_ranks": 2,
+  "iterations": 201,
+  "initial_density": 0.5,
+  "original_mesh_size": 0.015,
+  "mesh_size": 0.03,
+  "mesh_scale": 2.0,
+  "mesh_note": "User-authorized coarser mesh for local resources; all other model and optimizer settings retain their original values.",
+  "initial_compliance": 15.83067788078595,
+  "final_compliance": 10.057326521901732,
+  "volume_fraction": 0.14999796079017053,
+  "volume_limit": 0.15,
+  "design_volume": 0.48999999999999894,
+  "filter_coefficient": 0.0002,
+  "objective_scale": 10.0,
+  "optimizer": "original pyMMAopt 934c0f3",
+  "optimizer_parameters": {
+    "move": 0.2,
+    "maximum_iterations": 200,
+    "m": 1,
+    "IP": 0,
+    "tol": 1e-06,
+    "accepted_tol": 0.0001,
+    "norm": "L2",
+    "gcmma": false
+  },
+  "optimizer_change": 0.00028293641841448114,
+  "converged": false,
+  "stopping_reason": "original_iteration_limit",
+  "elapsed_seconds": 682.012776851,
+  "mesh_sha256": "10ad984ba4d92482c16e727d7952eb23341a4386109589b8881092a94a890201",
+  "symmetry_planes": {
+    "x": 0.0,
+    "y": 1.0
+  }
+}
