@@ -25,15 +25,15 @@ The Dockerfile uses the official `firedrake-vanilla-default:2026.10.0` image
 and installs Gmsh, [pyMMAopt](https://github.com/LLNL/pyMMAopt/tree/934c0f304354fcb9430e2c326dedf557e3705eab),
 and plotting dependencies.
 
-To use the original mesh resolution (requires more memory):
+For the original mesh, give Docker 8 GB of memory and use one MPI process:
 
 ```bash
-BRIDGE_MESH_SCALE=1 ./scripts/run.sh output/original
+BRIDGE_MESH_SCALE=1 BRIDGE_MPI_RANKS=1 ./scripts/run.sh output/original-fine
 ```
 
-`BRIDGE_MPI_RANKS=1` selects one process. Default output is `output/demo/` on your
-computer: open `report.html`, `bridge.png`, or `convergence.png` directly, or use
-ParaView for `final.pvd` and its companion folder. No copying out of Docker is needed.
+Default output is `output/demo/` on your computer: open `report.html`, `bridge.png`,
+or `convergence.png` directly, or use ParaView for `final.pvd` and its companion
+folder. No copying out of Docker is needed.
 Regenerate figures with `./scripts/render.sh`.
 See [docs/README.md](docs/README.md) for the saved reference figures and JSON records.
 
