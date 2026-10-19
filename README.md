@@ -47,11 +47,7 @@ Mesh reduction and display smoothing can change its appearance from the article.
 
 ## Licenses
 
-The original bridge's [MIT license](LICENSE) is retained. pyMMAopt's upstream
-[LICENSE](https://github.com/LLNL/pyMMAopt/blob/934c0f304354fcb9430e2c326dedf557e3705eab/LICENSE)
-is GPL-2.0, despite inconsistent MIT package metadata. Its original source,
-license, and LLNL notice are retained in the Docker image under `/opt/pyMMAopt`.
-
-Firedrake is LGPL-3.0-or-later. If pyMMAopt is GPL-2.0-only, compatibility for
-redistributing their combination needs clarification. Forking does not resolve
-that upstream licensing ambiguity.
+The original bridge is [MIT licensed](LICENSE). pyMMAopt uses
+[GPL-2.0](https://github.com/LLNL/pyMMAopt/blob/934c0f304354fcb9430e2c326dedf557e3705eab/LICENSE),
+and Firedrake uses LGPL-3.0-or-later. pyMMAopt's original source and notices
+are retained under `/opt/pyMMAopt` in the Docker image.
