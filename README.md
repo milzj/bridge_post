@@ -35,6 +35,7 @@ BRIDGE_MESH_SCALE=1 ./scripts/run.sh output/original
 computer: open `report.html`, `bridge.png`, or `convergence.png` directly, or use
 ParaView for `final.pvd` and its companion folder. No copying out of Docker is needed.
 Regenerate figures with `./scripts/render.sh`.
+See [docs/README.md](docs/README.md) for the saved reference figures and JSON records.
 
 The local mesh completed 201 MMA updates and passed the
 [saved checks](docs/verification.json); it reached the original iteration limit.
